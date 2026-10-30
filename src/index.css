@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --color-bg: #f3efe6;
+  --color-ink: #1c1915;
+  --color-surface: #fffdf8;
+  --color-muted: #6e665c;
+  --color-line: #e3d9c8;
+  --color-pine: #0e6b52;
+  --color-pine-ink: #f3fff8;
+  --color-clay: #c24e24;
+  --color-clay-ink: #fff6f2;
+  --color-moss: #e5f2ea;
+  --color-sand: #f7f1e6;
+  --color-warn: #8a5a12;
+  --color-warn-bg: #f8ecd4;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+
+  #balcao-print,
+  #balcao-print * {
+    visibility: visible !important;
+  }
+
+  #balcao-print {
+    position: absolute !important;
+    inset: 0 auto auto 0 !important;
+    width: 100% !important;
+    background: #fff !important;
+  }
+}

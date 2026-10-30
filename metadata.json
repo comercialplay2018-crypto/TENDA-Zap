@@ -1,0 +1,6 @@
+{
+  "name": "Balcão - Atendente WhatsApp",
+  "description": "WhatsApp do comércio: Atendente automatizado inteligente com catálogo, horários, promoções, análise de Pix e fila de impressão.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
