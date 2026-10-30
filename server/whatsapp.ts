@@ -76,6 +76,7 @@ const STORE_FILE = path.resolve(DATA_DIR, "wa-store.json");
 
 class WhatsAppManager {
   private sock: WASocket | null = null;
+  private currentSocketId = 0;
   private status: WaStatus = "off";
   private qrDataUrl: string | null = null;
   private phone = "";
@@ -84,6 +85,7 @@ class WhatsAppManager {
   private isStarting = false;
   private isRegistered = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private consecutiveFailures = 0;
 
   private deskGetter: (() => any) | null = null;
   private replyGenerator: ((input: any) => Promise<string>) | null = null;
@@ -120,8 +122,8 @@ class WhatsAppManager {
         if (raw && (raw.registered || raw.me)) {
           this.isRegistered = true;
           this.status = "connecting";
-          this.note = "Sessão salva encontrada. Reconectando automaticamente ao seu WhatsApp...";
-          console.log("[WhatsApp] Sessão existente no disco detectada. Reconectando sem QR Code...");
+          this.note = "Sessão salva encontrada. Conectando ao seu WhatsApp...";
+          console.log("[WhatsApp] Sessão existente no disco detectada. Conectando com credenciais salvas...");
           void this.start();
         }
       }
@@ -139,7 +141,6 @@ class WhatsAppManager {
         this.messagesMap = data.messagesMap && typeof data.messagesMap === "object" ? data.messagesMap : {};
         this.receipts = Array.isArray(data.receipts) ? data.receipts : [];
 
-        // Purge any accidental mock threads from previous tests
         const mockNames = ["mariana santos", "carlos mecânica", "dra. juliana", "roberto silva"];
         this.threads = this.threads.filter(
           (t) => !mockNames.some((m) => t.name.toLowerCase().includes(m))
@@ -268,37 +269,40 @@ class WhatsAppManager {
     }
     this.isStarting = true;
 
-    // Clear any pending reconnect timers
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
 
+    // Assign a unique instance ID to isolate this socket's lifecycle
+    const socketId = ++this.currentSocketId;
+
     if (this.status !== "qr") {
       this.status = "connecting";
       this.note = this.isRegistered
-        ? "Reconectando com suas credenciais salvas..."
+        ? "Conectando ao WhatsApp com sessão segura..."
         : "Iniciando conexão segura com os servidores do WhatsApp...";
     }
 
     try {
       await this.ensureDirs();
 
+      // Safely cleanup previous socket without triggering its close handlers
       if (this.sock) {
+        const oldSock = this.sock;
+        this.sock = null;
         try {
-          this.sock.ev.removeAllListeners("connection.update");
-          this.sock.ev.removeAllListeners("messages.upsert");
-          this.sock.ev.removeAllListeners("creds.update");
-          this.sock.end(new Error("Refreshing socket"));
+          oldSock.ev.removeAllListeners("connection.update");
+          oldSock.ev.removeAllListeners("messages.upsert");
+          oldSock.ev.removeAllListeners("creds.update");
+          oldSock.end(undefined);
         } catch {
           // ignore
         }
-        this.sock = null;
       }
 
       const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
-      // Check if credentials on disk are already registered
       if (state.creds.registered || state.creds.me) {
         this.isRegistered = true;
       }
@@ -321,17 +325,27 @@ class WhatsAppManager {
         browser: Browsers.ubuntu("Chrome"),
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
-        keepAliveIntervalMs: 25000,
+        keepAliveIntervalMs: 30000,
         syncFullHistory: false,
-        markOnlineOnConnect: true,
+        markOnlineOnConnect: false, // Prevents presence clash with phone
         generateHighQualityLinkPreview: false,
+        getMessage: async (key) => {
+          const cId = Number(key.remoteJid?.split("@")[0]);
+          const list = this.messagesMap[cId] || [];
+          const found = list.find((m) => m.id === Number(key.id));
+          if (found) {
+            return { conversation: found.body };
+          }
+          return undefined;
+        },
       });
 
       this.sock = sock;
 
-      // Handle 8-digit Pairing Code
+      // Handle 8-digit Pairing Code if requested
       if (phoneForPairingCode && !state.creds.registered) {
         setTimeout(async () => {
+          if (this.currentSocketId !== socketId) return;
           try {
             const clean = phoneForPairingCode.replace(/\D/g, "");
             if (clean.length >= 10 && sock.requestPairingCode) {
@@ -348,6 +362,11 @@ class WhatsAppManager {
       sock.ev.on("creds.update", saveCreds);
 
       sock.ev.on("connection.update", async (update) => {
+        // Discard events from any previous socket instance
+        if (this.currentSocketId !== socketId) {
+          return;
+        }
+
         const { connection, lastDisconnect, qr } = update;
 
         // New QR Code emitted by WhatsApp
@@ -362,8 +381,8 @@ class WhatsAppManager {
               },
             });
             this.status = "qr";
-            this.note = "QR Code oficial do WhatsApp gerado! Aponte a câmera do WhatsApp para conectar.";
-            console.log("[WhatsApp] QR Code emitido com sucesso e mantido na tela.");
+            this.note = "QR Code oficial do WhatsApp pronto! Aponte a câmera do WhatsApp no celular para conectar.";
+            console.log("[WhatsApp] QR Code emitido com sucesso e estabilizado.");
           } catch (qrErr) {
             console.error("[WhatsApp] Erro ao renderizar QR Code:", qrErr);
           }
@@ -375,19 +394,31 @@ class WhatsAppManager {
           this.isRegistered = true;
           this.qrDataUrl = null;
           this.pairingCode = null;
+          this.consecutiveFailures = 0; // Reset failure counter
           const userJid = sock.user?.id || "";
           this.phone = userJid.split(":")[0]?.split("@")[0] || "";
-          this.note = `WhatsApp conectado no número +${this.phone}! O atendente Balcão está ativo respondendo clientes.`;
-          console.log(`[WhatsApp] CONECTADO COM SUCESSO! Número: +${this.phone}`);
+          this.note = `WhatsApp conectado com sucesso no número +${this.phone}! O atendente Balcão está ativo.`;
+          console.log(`[WhatsApp] CONECTADO E ESTÁVEL! Número: +${this.phone}`);
         }
 
         // Connection closed / disconnected
         if (connection === "close") {
           const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
           const isLoggedOut = statusCode === DisconnectReason.loggedOut;
-          console.log(`[WhatsApp] Conexão encerrada. Código: ${statusCode}. Registrado: ${this.isRegistered}`);
+          const isReplaced = statusCode === DisconnectReason.connectionReplaced;
 
-          // SCENARIO A: Already registered, but user explicitly logged out from mobile phone
+          console.log(`[WhatsApp] Conexão finalizada. Código HTTP: ${statusCode}. Registrado: ${this.isRegistered}`);
+
+          // SCENARIO 1: Another WhatsApp Web instance or browser tab opened for this account
+          // DO NOT auto-reconnect to avoid infinite ping-pong loop!
+          if (isReplaced) {
+            console.log("[WhatsApp] Sessão substituída por outro aparelho ou aba. Auto-reconexão pausada para evitar loop.");
+            this.status = "off";
+            this.note = "Outro aparelho ou aba conectou a esta conta de WhatsApp. Conexão pausada para evitar conflito. Clique em 'Conectar' se quiser usar aqui.";
+            return;
+          }
+
+          // SCENARIO 2: Explicit logout from phone settings
           if (this.isRegistered && isLoggedOut) {
             console.log("[WhatsApp] Desconectado no celular pelo usuário. Limpando credenciais.");
             this.status = "off";
@@ -399,34 +430,46 @@ class WhatsAppManager {
             return;
           }
 
-          // SCENARIO B: Already registered, and connection dropped (network glitch, sleep, 515 restartRequired, 408 timedOut, etc.)
-          // AUTO-RECONNECT AUTOMATICALLY WITHOUT REQUIRING QR CODE!
+          // SCENARIO 3: Registered session had network drop, sleep, or temporary server hiccup
           if (this.isRegistered) {
+            this.consecutiveFailures++;
+
+            if (this.consecutiveFailures > 5) {
+              console.warn("[WhatsApp] Muitas falhas consecutivas de rede. Pausando auto-reconexão.");
+              this.status = "off";
+              this.note = "Instabilidade de rede temporária. Clique no botão verde 'Conectar' para restabelecer a conexão.";
+              return;
+            }
+
+            // Exponential backoff delay (3s, 5s, 8s...)
+            const delay = Math.min(3000 * Math.pow(1.3, this.consecutiveFailures - 1), 12000);
             this.status = "connecting";
-            this.note = "Conexão oscilou. Reconectando automaticamente ao WhatsApp sem precisar de QR Code...";
-            console.log("[WhatsApp] Reconexão automática em andamento...");
+            this.note = `Reconectando ao WhatsApp em ${Math.round(delay / 1000)}s...`;
+            console.log(`[WhatsApp] Agendando reconexão em ${delay}ms (tentativa ${this.consecutiveFailures})...`);
+
             if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
             this.reconnectTimer = setTimeout(() => {
-              void this.start();
-            }, 3000);
+              if (this.currentSocketId === socketId && this.status !== "open") {
+                void this.start();
+              }
+            }, delay);
             return;
           }
 
-          // SCENARIO C: Not registered yet (QR code phase)
-          // The close here is just a QR refresh cycle. DO NOT clear auth files and DO NOT blank the QR code.
-          console.log("[WhatsApp] Atualizando QR Code para manter a validade...");
+          // SCENARIO 4: Not registered yet (QR code refresh cycle)
+          console.log("[WhatsApp] Renovando QR Code para manter a validade...");
           if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
           this.reconnectTimer = setTimeout(() => {
-            if (this.status !== "open" && !this.isRegistered) {
+            if (this.currentSocketId === socketId && this.status !== "open" && !this.isRegistered) {
               void this.start();
             }
-          }, 1500);
+          }, 2000);
         }
       });
 
       // INCOMING REAL WHATSAPP MESSAGES LISTENER
       sock.ev.on("messages.upsert", async ({ messages }) => {
-        if (!messages || messages.length === 0) return;
+        if (this.currentSocketId !== socketId || !messages || messages.length === 0) return;
 
         for (const msg of messages) {
           try {

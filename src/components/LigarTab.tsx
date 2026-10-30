@@ -318,6 +318,16 @@ export function LigarTab({
           </div>
         )}
 
+        {/* Hosting guidance tip */}
+        <div className="mt-3 rounded-xl border border-line bg-sand/60 p-3 text-xs leading-relaxed text-muted">
+          <p className="font-semibold text-ink flex items-center gap-1.5 mb-1">
+            <Sparkles size={14} className="text-pine" /> Como funciona a conexão contínua do WhatsApp:
+          </p>
+          <p>
+            O WhatsApp Web mantém um canal ao vivo (WebSocket) para responder clientes no mesmo segundo. O sistema foi blindado para evitar conflitos de sessões duplicadas e reconexões em loop. Para manter o robô respondendo 24 horas por dia, certifique-se de executar em um servidor Node.js contínuo (como Railway, Render, Fly.io ou VPS).
+          </p>
+        </div>
+
         {/* 8-Digit Pairing Code Display */}
         {pairingCode && (
           <div className="my-2 rounded-2xl border border-pine/30 bg-moss/70 p-4 text-center">

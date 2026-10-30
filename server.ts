@@ -32,7 +32,13 @@ const ai = new GoogleGenAI({
   },
 });
 
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { waManager } from "./server/whatsapp.ts";
+
+const DATA_DIR = process.env.VERCEL
+  ? path.resolve("/tmp", "balcao-data")
+  : path.resolve(process.cwd(), "data");
+const DESK_CONFIG_FILE = path.resolve(DATA_DIR, "desk-config.json");
 
 let latestDeskState: any = {
   shop: {
@@ -53,6 +59,20 @@ let latestDeskState: any = {
     { name: "Encadernação Espiral", priceCents: 800, unit: "un", available: true },
   ],
 };
+
+// Load saved desk configuration from disk if exists
+try {
+  if (existsSync(DESK_CONFIG_FILE)) {
+    const raw = readFileSync(DESK_CONFIG_FILE, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.shop?.name) {
+      latestDeskState = parsed;
+      console.log(`[Balcão] Configurações da loja carregadas do disco: ${latestDeskState.shop.name}`);
+    }
+  }
+} catch (e) {
+  console.warn("Could not load desk-config.json:", e);
+}
 
 // Wire up AI generator for live incoming WhatsApp messages
 waManager.setAiCallbacks(
@@ -184,9 +204,36 @@ app.post("/api/whatsapp/update-receipt", (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+app.get("/api/desk", (_req: Request, res: Response) => {
+  res.json(latestDeskState);
+});
+
+app.post("/api/desk", (req: Request, res: Response) => {
+  if (req.body?.desk) {
+    latestDeskState = req.body.desk;
+    try {
+      if (!existsSync(DATA_DIR)) {
+        mkdirSync(DATA_DIR, { recursive: true });
+      }
+      writeFileSync(DESK_CONFIG_FILE, JSON.stringify(latestDeskState, null, 2), "utf-8");
+    } catch (e) {
+      console.warn("Could not save desk-config.json:", e);
+    }
+  }
+  res.json({ ok: true });
+});
+
 app.post("/api/whatsapp/sync-desk", (req: Request, res: Response) => {
   if (req.body?.desk) {
     latestDeskState = req.body.desk;
+    try {
+      if (!existsSync(DATA_DIR)) {
+        mkdirSync(DATA_DIR, { recursive: true });
+      }
+      writeFileSync(DESK_CONFIG_FILE, JSON.stringify(latestDeskState, null, 2), "utf-8");
+    } catch (e) {
+      console.warn("Could not save desk-config.json:", e);
+    }
   }
   res.json({ ok: true });
 });

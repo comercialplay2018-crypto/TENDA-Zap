@@ -69,9 +69,22 @@ export default function App() {
     BalcaoStorage.saveWaLink(waLink);
   }, [waLink]);
 
+  // Load saved desk configuration from server on mount
+  useEffect(() => {
+    fetch("/api/desk")
+      .then((r) => r.json())
+      .then((serverDesk) => {
+        if (serverDesk && serverDesk.shop?.name) {
+          setDesk(serverDesk);
+          BalcaoStorage.saveDesk(serverDesk);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   // Sync desk changes to server backend
   useEffect(() => {
-    fetch("/api/whatsapp/sync-desk", {
+    fetch("/api/desk", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ desk }),
